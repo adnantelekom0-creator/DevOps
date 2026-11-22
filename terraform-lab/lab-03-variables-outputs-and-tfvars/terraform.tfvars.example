@@ -1,0 +1,5 @@
+environment = "production"
+app_tags = {
+  team    = "core-infra"
+  project = "portal"
+}
