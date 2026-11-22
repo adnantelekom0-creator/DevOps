@@ -1,0 +1,9 @@
+{
+  "name": "jenkins-demo-microservice",
+  "version": "1.0.0",
+  "description": "Declarative Pipeline Demo",
+  "main": "server.js",
+  "scripts": {
+    "test": "node test.js"
+  }
+}

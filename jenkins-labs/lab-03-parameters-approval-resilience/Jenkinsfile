@@ -1,0 +1,109 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 15, unit: 'MINUTES')
+        retry(1)
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    parameters {
+        choice(
+            name: 'DEPLOY_ENV',
+            choices: ['development', 'staging', 'production'],
+            description: 'Hedef dağıtım ortamını seçin.'
+        )
+        string(
+            name: 'RELEASE_VERSION',
+            defaultValue: '1.2.0',
+            description: 'Yayınlanacak sürüm numarası (SemVer).'
+        )
+        booleanParam(
+            name: 'RUN_INTEGRATION_TESTS',
+            defaultValue: true,
+            description: 'Kapsamlı entegrasyon testleri çalıştırılsın mı?'
+        )
+        choice(
+            name: 'REPLICA_COUNT',
+            choices: ['1', '2', '5'],
+            description: 'Hedef ortam için pod/konteyner replika sayısı.'
+        )
+    }
+
+    stages {
+        stage('Kaynak Kodları Çekme (Checkout)') {
+            steps {
+                checkout scm
+                sh '''
+                    if [ -d "lab-03-parameters-approval-resilience" ]; then
+                        cp -rf lab-03-parameters-approval-resilience/* . || true
+                    fi
+                '''
+            }
+        }
+
+        stage('Parametreleri Doğrulama') {
+            steps {
+                echo "=============================================="
+                echo "HEDEF ORTAM      : ${params.DEPLOY_ENV}"
+                echo "SÜRÜM            : ${params.RELEASE_VERSION}"
+                echo "ENTEGRASYON TEST : ${params.RUN_INTEGRATION_TESTS}"
+                echo "REPLİKA SAYISI   : ${params.REPLICA_COUNT}"
+                echo "DAYANIKLILIK     : disableConcurrentBuilds=AKTIF"
+                echo "=============================================="
+            }
+        }
+
+        stage('Derleme (Build)') {
+            steps {
+                echo "Uygulama v${params.RELEASE_VERSION} sürümü için derleniyor..."
+                sh """
+                    echo "Release Version: ${params.RELEASE_VERSION}" > build.properties
+                    echo "Target Environment: ${params.DEPLOY_ENV}" >> build.properties
+                    cat build.properties
+                """
+            }
+        }
+
+        stage('Entegrasyon Testleri (Opsiyonel)') {
+            when {
+                expression { return params.RUN_INTEGRATION_TESTS == true }
+            }
+            steps {
+                echo "Koşul sağlandı: Entegrasyon testleri icra ediliyor..."
+                sh "echo 'Entegrasyon testi simüle edildi: PASSED'"
+            }
+        }
+
+        stage('Production Manuel Onay') {
+            when {
+                expression { return params.DEPLOY_ENV == 'production' }
+            }
+            steps {
+                echo "DİKKAT: Üretim (Production) ortamına dağıtım yapılacak!"
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: "v${params.RELEASE_VERSION} sürümünü Production ortamına dağıtmayı onaylıyor musunuz?", ok: 'Dağıtımı Başlat'
+                }
+            }
+        }
+
+        stage('Ortama Dağıtım (Deploy)') {
+            steps {
+                echo "${params.DEPLOY_ENV} ortamına ${params.REPLICA_COUNT} adet replika ile dağıtım yapılıyor..."
+                sh """
+                    echo "Dağıtım başarılı: ${params.DEPLOY_ENV} | Sürüm: ${params.RELEASE_VERSION}"
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Dağıtım süreci ${params.DEPLOY_ENV} ortamı için başarıyla tamamlandı."
+        }
+        failure {
+            echo "Dağıtım süreci başarısız oldu!"
+        }
+    }
+}

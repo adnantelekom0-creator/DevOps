@@ -1,0 +1,110 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'TARGET_STACK', choices: ['all', 'python', 'node'], description: 'Çalıştırılacak teknoloji yığını')
+        booleanParam(name: 'RUN_LINTER', defaultValue: true, description: 'Statik kod analizi (Flake8) çalıştırılsın mı?')
+    }
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        retry(1)
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    environment {
+        APP_ENV = 'testing'
+    }
+
+    stages {
+        stage('Başlangıç ve Parametre Kontrolü') {
+            steps {
+                echo "=== Build Manager ve Test Yaşam Döngüsü Başlatılıyor ==="
+                echo "Hedef Yığın : ${params.TARGET_STACK}"
+                echo "Linter Aktif: ${params.RUN_LINTER}"
+                echo "Ortam       : ${env.APP_ENV}"
+            }
+        }
+
+        stage('Python: Flake8 Statik Kod Analizi (SCA)') {
+            when {
+                expression { 
+                    return (params.TARGET_STACK == 'all' || params.TARGET_STACK == 'python') && params.RUN_LINTER == true 
+                }
+            }
+            steps {
+                echo "Python kod standartları flake8 ile taranıyor (İzole Konteyner)..."
+                sh '''
+                    APP_DIR="$PWD"
+                    if [ -d "$PWD/bonus-labs/02-build-managers-npm-python/app-python" ]; then
+                        APP_DIR="$PWD/bonus-labs/02-build-managers-npm-python/app-python"
+                    elif [ -d "$PWD/app-python" ]; then
+                        APP_DIR="$PWD/app-python"
+                    fi
+                    docker run --rm \
+                        --volumes-from jenkins \
+                        -w "$APP_DIR" \
+                        python:3.11-slim \
+                        sh -c "pip install --no-cache-dir flake8 && flake8 . --max-line-length=120"
+                '''
+            }
+        }
+
+        stage('Python: Pytest Birim Testleri') {
+            when {
+                expression { return params.TARGET_STACK == 'all' || params.TARGET_STACK == 'python' }
+            }
+            steps {
+                echo "Python birim testleri koşturuluyor (İzole Konteyner)..."
+                sh '''
+                    APP_DIR="$PWD"
+                    if [ -d "$PWD/bonus-labs/02-build-managers-npm-python/app-python" ]; then
+                        APP_DIR="$PWD/bonus-labs/02-build-managers-npm-python/app-python"
+                    elif [ -d "$PWD/app-python" ]; then
+                        APP_DIR="$PWD/app-python"
+                    fi
+                    docker run --rm \
+                        --volumes-from jenkins \
+                        -w "$APP_DIR" \
+                        python:3.11-slim \
+                        sh -c "pip install --no-cache-dir pytest && python -m pytest tests/ -v"
+                '''
+            }
+        }
+
+        stage('Node.js: Bağımlılık ve Birim Testleri (npm)') {
+            when {
+                expression { return params.TARGET_STACK == 'all' || params.TARGET_STACK == 'node' }
+            }
+            steps {
+                echo "Node.js bağımlılıkları ve birim testleri koşturuluyor (İzole Konteyner)..."
+                sh '''
+                    APP_DIR="$PWD"
+                    if [ -d "$PWD/bonus-labs/02-build-managers-npm-python/app-node" ]; then
+                        APP_DIR="$PWD/bonus-labs/02-build-managers-npm-python/app-node"
+                    elif [ -d "$PWD/app-node" ]; then
+                        APP_DIR="$PWD/app-node"
+                    fi
+                    docker run --rm \
+                        --volumes-from jenkins \
+                        -w "$APP_DIR" \
+                        node:18-alpine \
+                        npm test
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Build manager ve test adımları tamamlandı."
+        }
+        success {
+            echo "[SUCCESS] Tüm test ve analiz adımları başarıyla tamamlandı!"
+        }
+        failure {
+            echo "[ERROR] Birim testleri veya statik analiz hatası nedeniyle derleme durduruldu."
+        }
+    }
+}

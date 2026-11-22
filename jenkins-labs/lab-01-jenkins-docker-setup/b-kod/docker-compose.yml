@@ -1,0 +1,41 @@
+# B bölümü: image Dockerfile'dan build edilir, ayarlar jenkins-as-code/ klasöründen gelir.
+name: jenkins-b
+
+services:
+  jenkins:
+    build: .
+    image: custom-jenkins:lts-jdk21
+    container_name: jenkins
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "18080:8080"
+      - "50000:50000"
+    environment:
+      # Değerler .env dosyasından okunur; .env yoksa varsayılanlar kullanılır.
+      - JENKINS_ADMIN_USER=${JENKINS_ADMIN_USER:-admin}
+      - JENKINS_ADMIN_PASSWORD=${JENKINS_ADMIN_PASSWORD:-DevOps2026!}
+      - JENKINS_URL=${JENKINS_URL:-http://localhost:18080/}
+      - JAVA_OPTS=-Djava.awt.headless=true -Xmx1536m -Djenkins.install.runSetupWizard=false -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
+      - CASC_JENKINS_CONFIG=/var/jenkins_config/jenkins.yaml
+    networks:
+      - default
+      # Sonraki lablarda Kind cluster'ına bu ağdan erişilir.
+      - kind
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/local/bin/kind:/usr/local/bin/kind:ro
+      # jenkins-labs deposunun kökü (bu dosyanın iki üst dizini)
+      - ../../:/workspace/jenkins-labs:ro
+      - ./jenkins-as-code:/var/jenkins_config:ro
+
+volumes:
+  jenkins_home:
+    name: jenkins_home
+
+networks:
+  kind:
+    external: true
+    name: kind

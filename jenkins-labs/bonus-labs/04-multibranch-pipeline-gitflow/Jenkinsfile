@@ -1,0 +1,89 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+    }
+
+    environment {
+        APP_NAME = 'multibranch-demo-app'
+        BRANCH   = "${env.BRANCH_NAME}"
+    }
+
+    stages {
+        stage('Ortam ve Dal Bilgisi') {
+            steps {
+                echo "Aktif Dal        : ${env.BRANCH_NAME}"
+                echo "Derleme Numarası : ${env.BUILD_NUMBER}"
+                echo "Git Commit SHA   : ${env.GIT_COMMIT}"
+                sh '''
+                    echo "Uygulama derleme hazırlıkları başlatılıyor..."
+                    echo "Çalışan Dal: ${BRANCH_NAME}"
+                '''
+            }
+        }
+
+        stage('Birim Testler') {
+            steps {
+                echo "Tüm dallar için temel birim testler çalıştırılıyor..."
+                sh '''
+                    echo "[TEST] Lint kontrolleri tamamlandı."
+                    echo "[TEST] 12 birim test başarıyla çalıştırıldı: PASSED"
+                '''
+            }
+        }
+
+        stage('Feature Testleri ve Raporlama') {
+            when {
+                branch pattern: 'feature/*', comparator: 'GLOB'
+            }
+            steps {
+                echo "Bu aşama YALNIZCA 'feature/*' dallarında çalışır."
+                sh '''
+                    echo "[FEATURE-BRANCH] Geliştirme dalında hızlı regresyon ve smoke testleri devrede."
+                '''
+            }
+        }
+
+        stage('Staging Ortamına Dağıtım') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                echo "Bu aşama YALNIZCA 'develop' dalında çalışır."
+                sh '''
+                    echo "[STAGING] Uygulama Staging test ortamına dağıtılıyor..."
+                    echo "Staging URL: http://127.0.0.1:19002/staging"
+                '''
+            }
+        }
+
+        stage('Production Ortamına Dağıtım') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo "Bu aşama YALNIZCA 'main' dalında çalışır."
+                sh '''
+                    echo "[PRODUCTION] Uygulama Canlı Production ortamına dağıtılıyor..."
+                    echo "Canlı Sürüm: v1.0.${BUILD_NUMBER}"
+                    echo "Production URL: http://127.0.0.1:19001"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Boru hattı tamamlandı. Dal: ${env.BRANCH_NAME}, Sonuç: ${currentBuild.currentResult}"
+        }
+        success {
+            echo "[SUCCESS] ${env.BRANCH_NAME} dalı başarıyla derlendi ve doğrulandı."
+        }
+        failure {
+            echo "[ERROR] ${env.BRANCH_NAME} dalı derleme sürecinde hata oluştu!"
+        }
+    }
+}

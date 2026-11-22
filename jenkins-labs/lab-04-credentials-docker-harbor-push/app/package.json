@@ -1,0 +1,12 @@
+{
+  "name": "docker-jenkins-demo",
+  "version": "1.0.0",
+  "description": "Docker build and push demonstration app for Jenkins",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node -e \"console.log('Unit tests passed successfully')\""
+  },
+  "author": "DevOps Atolyesi",
+  "license": "MIT"
+}

@@ -1,0 +1,12 @@
+# Image build edilirken kurulan eklentiler (jenkins-plugin-cli -f plugins.txt).
+# Sürüm yazılmayan eklentinin en son sürümü kurulur.
+git
+workflow-aggregator
+pipeline-stage-view
+credentials-binding
+docker-workflow
+configuration-as-code
+job-dsl
+sonar
+timestamper
+ws-cleanup

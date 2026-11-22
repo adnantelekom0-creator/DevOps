@@ -1,0 +1,11 @@
+{
+  "name": "node-calculator-api",
+  "version": "1.0.0",
+  "description": "Lab-04 Node.js build manager test app",
+  "main": "server.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

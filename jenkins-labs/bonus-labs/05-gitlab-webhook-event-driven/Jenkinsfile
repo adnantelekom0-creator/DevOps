@@ -1,0 +1,37 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 10, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    stages {
+        stage('Webhook Olay Bilgisi') {
+            steps {
+                echo "=========================================="
+                echo "[EVENT-DRIVEN] Boru hattı bir Git olay bildirimi ile tetiklendi!"
+                echo "Derleme Numarası: ${env.BUILD_NUMBER}"
+                echo "Tetikleme Nedeni : ${currentBuild.getBuildCauses()}"
+                echo "=========================================="
+            }
+        }
+
+        stage('Hızlı Doğrulama (Fast Feedback)') {
+            steps {
+                echo "Gelen kod değişiklikleri için hızlı sözdizimi ve derleme denetimi yapılıyor..."
+                sh '''
+                    echo "[CHECK] Git commit metaverileri doğrulandı."
+                    echo "[CHECK] Sözdizimi ve kod stili kontrolü: PASSED"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] GitLab Webhook kaynaklı derleme başarıyla tamamlandı."
+        }
+    }
+}

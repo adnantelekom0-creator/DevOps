@@ -1,0 +1,93 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 10, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    environment {
+        CLUSTER_NAME = 'devops-kind-cluster'
+        BASE_VERSION = '2.4.0'
+    }
+
+    stages {
+        stage('Ortam ve Değişkenler') {
+            steps {
+                echo "=== Dinamik Boru Hattı Değerleri ==="
+                echo "Küme: ${env.CLUSTER_NAME}"
+                echo "Temel Sürüm: ${env.BASE_VERSION}"
+                echo "Derleme No: ${env.BUILD_NUMBER}"
+            }
+        }
+
+        stage('Groovy Script Bloğu ile Hesaplama') {
+            steps {
+                script {
+                    echo "Groovy çalışma zamanı mantığı işletiliyor..."
+                    def basePort = 3000
+                    def replicaCount = 3
+                    def calculatedPort = basePort + Integer.parseInt(env.BUILD_NUMBER)
+
+                    echo "[GROOVY-LOG] Temel Port: ${basePort} | Tahsis Edilen Dinamik Port: ${calculatedPort}"
+
+                    if (replicaCount > 2) {
+                        echo "[GROOVY-LOG] Yüksek erişilebilirlik (HA) modu aktif. Replikalar: ${replicaCount}"
+                    } else {
+                        echo "[GROOVY-LOG] Standart tekil mod aktif."
+                    }
+                }
+            }
+        }
+
+        stage('Döngü ile Çoklu Mikroservis Sağlık Taraması') {
+            steps {
+                script {
+                    // Mikroservis listesi ve port eşlemeleri
+                    def microservices = [
+                        [name: 'catalog-service', port: 8081, healthPath: '/healthz'],
+                        [name: 'order-service',   port: 8082, healthPath: '/healthz'],
+                        [name: 'payment-service', port: 8083, healthPath: '/healthz'],
+                        [name: 'notification',    port: 8084, healthPath: '/healthz']
+                    ]
+
+                    echo "=== Toplam ${microservices.size()} Mikroservis Taranıyor ==="
+
+                    for (svc in microservices) {
+                        echo "--- Servis: ${svc.name} ---"
+                        echo "Hedef Port: ${svc.port} | Uç Nokta: ${svc.healthPath}"
+                        sh """
+                            echo "Simüle ediliyor: curl -s http://127.0.0.1:${svc.port}${svc.healthPath} -> HTTP 200 OK"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Dinamik Koşullu Dağıtım Matrisi') {
+            steps {
+                script {
+                    def environments = ['development', 'staging', 'production']
+
+                    environments.each { targetEnv ->
+                        if (targetEnv == 'production') {
+                            echo "[GATEKEEPER] ${targetEnv} ortamı için ekstra güvenlik doğrulama adımları devrede."
+                        } else {
+                            echo "[FAST-TRACK] ${targetEnv} ortamına hızlı otomatik onay verildi."
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Dinamik script adımları tamamlandı."
+        }
+        success {
+            echo "[SUCCESS] Tüm döngü ve koşul blokları hatasız yürütüldü."
+        }
+    }
+}

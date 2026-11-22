@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '1.4.0', description: 'Test edilecek sürüm etiketi')
+        booleanParam(name: 'TRIGGER_DOWNSTREAM', defaultValue: true, description: 'Başarı durumunda downstream dağıtım job\'ını tetikle')
+    }
+
+    stages {
+        stage('Hazırlık ve Kaynak Kontrolü') {
+            steps {
+                echo "=== Paralel Test ve Quality Gate'ler Başlatılıyor ==="
+                echo "Sürüm: ${params.APP_VERSION}"
+            }
+        }
+
+        stage('Paralel Kalite ve Test Kapıları (Parallel Execution)') {
+            parallel {
+                stage('Güvenlik ve Zafiyet Taraması') {
+                    steps {
+                        echo "[PARALEL 1] Bağımlılık ve statik güvenlik denetimleri koşturuluyor..."
+                        sh 'sleep 2 && echo "[SECURITY] Bilinen CVE açığı tespit edilmedi: PASSED"'
+                    }
+                }
+
+                stage('Birim ve Regresyon Testleri') {
+                    steps {
+                        echo "[PARALEL 2] Birim ve regresyon test paketleri koşturuluyor..."
+                        sh 'sleep 3 && echo "[TESTS] 48 test başarıyla tamamlandı: PASSED"'
+                    }
+                }
+
+                stage('Açık Kaynak Lisans Uyumluluğu') {
+                    steps {
+                        echo "[PARALEL 3] Üçüncü taraf paketlerin lisansları denetleniyor..."
+                        sh 'sleep 2 && echo "[COMPLIANCE] GPL ihlali bulunamadı, MIT/Apache 2.0 onaylandı: PASSED"'
+                    }
+                }
+            }
+        }
+
+        stage('Sonuçların Birleştirilmesi ve Paketleme') {
+            steps {
+                echo "Tüm paralel adımlar başarıyla tamamlandı. Dağıtım paketi oluşturuluyor..."
+                sh """
+                    mkdir -p build
+                    echo "Version: ${params.APP_VERSION}" > build/release-summary.txt
+                    echo "Quality Gates: PASSED" >> build/release-summary.txt
+                    echo "Completed At: \$(date -u)" >> build/release-summary.txt
+                    cat build/release-summary.txt
+                """
+            }
+        }
+
+        stage('Downstream Job Chaining (Trigger Downstream Job)') {
+            when {
+                expression { return params.TRIGGER_DOWNSTREAM == true }
+            }
+            steps {
+                echo "Bağlı downstream dağıtım job'ı tetikleniyor..."
+                build job: 'downstream-deploy-worker',
+                      parameters: [string(name: 'UPSTREAM_VERSION', value: params.APP_VERSION)],
+                      wait: false
+                echo "[DOWNSTREAM] 'downstream-deploy-worker' job'ı tetiklendi."
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Paralel pipeline yürütmesi sonlandı."
+        }
+        success {
+            echo "[SUCCESS] Tüm paralel test ve Quality Gate'ler başarıyla geçildi."
+        }
+    }
+}

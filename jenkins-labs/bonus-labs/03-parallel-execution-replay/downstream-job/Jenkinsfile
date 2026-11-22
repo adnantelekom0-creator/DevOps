@@ -1,0 +1,24 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'UPSTREAM_VERSION', defaultValue: 'unknown', description: 'Upstream pipeline\'dan aktarılan sürüm')
+    }
+
+    stages {
+        stage('Downstream Dağıtım') {
+            steps {
+                echo "=== Downstream Dağıtım Ajanı Devrede ==="
+                echo "Upstream pipeline'dan gelen sürüm: ${params.UPSTREAM_VERSION}"
+                echo "Hedef ortama dağıtım simüle ediliyor..."
+                sh 'sleep 2'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] Downstream dağıtımı başarıyla tamamlandı."
+        }
+    }
+}

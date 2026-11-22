@@ -1,0 +1,7 @@
+# ArgoCD bu klasörü izler. Image etiketi ArgoCD Application'daki kustomize image ayarıyla değişir.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gitops-demo
+resources:
+  - deployment.yaml
+  - service.yaml

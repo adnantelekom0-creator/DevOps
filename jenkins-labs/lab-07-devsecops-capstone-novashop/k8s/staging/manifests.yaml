@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: novashop-order-service-staging
+  namespace: staging
+  labels:
+    app: novashop-order-service
+    env: staging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: novashop-order-service
+      env: staging
+  template:
+    metadata:
+      labels:
+        app: novashop-order-service
+        env: staging
+    spec:
+      containers:
+      - name: order-service
+        image: 127.0.0.1:18444/devops-public/novashop-order-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: APP_ENV
+          value: "staging"
+        - name: PORT
+          value: "8080"
+        resources:
+          limits:
+            cpu: "250m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: novashop-order-service-staging
+  namespace: staging
+  labels:
+    app: novashop-order-service
+spec:
+  type: ClusterIP
+  selector:
+    app: novashop-order-service
+    env: staging
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP

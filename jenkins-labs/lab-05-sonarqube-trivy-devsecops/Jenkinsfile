@@ -1,0 +1,149 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 25, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        booleanParam(name: 'ENABLE_QUALITY_GATE', defaultValue: false, description: 'SonarQube Quality Gate sonucunu zorunlu kılsın mı?')
+        choice(name: 'TRIVY_SEVERITY', choices: ['HIGH,CRITICAL', 'CRITICAL', 'MEDIUM,HIGH,CRITICAL'], description: 'Trivy güvenlik tarama eşiği')
+        booleanParam(name: 'FAIL_ON_VULNERABILITY', defaultValue: false, description: 'Kritik zafiyet bulunursa pipeline başarısız olsun mu?')
+    }
+
+    environment {
+        APP_IMAGE      = "devops-app-public:scan-v${env.BUILD_NUMBER}"
+        SONAR_HOST_URL = "http://172.17.0.1:19000"
+    }
+
+    stages {
+        stage('Kaynak Kodları Çekme (Checkout)') {
+            steps {
+                checkout scm
+                sh 'test -f lab-05-sonarqube-trivy-devsecops/Dockerfile'
+            }
+        }
+
+        stage('Ortam Bilgileri') {
+            steps {
+                echo "=== DevSecOps Güvenlik Taramaları Başlatılıyor ==="
+                echo "Trivy Eşik Seviyesi      : ${params.TRIVY_SEVERITY}"
+                echo "Quality Gate Zorunluluğu : ${params.ENABLE_QUALITY_GATE}"
+                echo "Hata Anında Kırılma      : ${params.FAIL_ON_VULNERABILITY}"
+                sh 'docker version'
+            }
+        }
+
+        stage('Birim Testler') {
+            steps {
+                echo "Uygulama testleri çalıştırılıyor..."
+                sh '''
+                    set -eu
+                    docker run --rm \
+                      --volumes-from jenkins \
+                      -w "$PWD/lab-05-sonarqube-trivy-devsecops/app" \
+                      node:18-alpine \
+                      sh -ceu 'npm install --ignore-scripts && npm test'
+                '''
+            }
+        }
+
+        stage('SCA - Dosya Sistemi Zafiyet Taraması (Trivy FS)') {
+            steps {
+                echo "Trivy ile dosya sistemi ve bağımlılıklar taranıyor..."
+                script {
+                    int scanStatus = sh(script: """
+                        docker run --rm \\
+                          --volumes-from jenkins \\
+                          -v trivy-cache:/root/.cache/ \\
+                          aquasec/trivy:latest fs --exit-code 1 \\
+                          --severity ${params.TRIVY_SEVERITY} "\$PWD/lab-05-sonarqube-trivy-devsecops"
+                    """, returnStatus: true)
+                    if (scanStatus != 0 && params.FAIL_ON_VULNERABILITY.toBoolean()) {
+                        error("[TRIVY-FS] Eşik üzerindeki zafiyet bulundu; build durduruldu.")
+                    }
+                    if (scanStatus != 0) {
+                        unstable("[TRIVY-FS] Bulgular var; öğrenme modu nedeniyle build UNSTABLE olarak işaretlendi.")
+                    }
+                }
+            }
+        }
+
+        stage('SAST - SonarQube Statik Kod Analizi') {
+            steps {
+                echo "SonarQube Scanner çalıştırılıyor..."
+                withSonarQubeEnv('sonarqube-local') {
+                    sh '''
+                        docker ps --format '{{.Names}}' | grep -q "sonarqube" || { echo "[ERROR] SonarQube bulunamadı. Ön koşulları tamamlayın."; exit 1; }
+                        docker run --rm \
+                            --user 0:0 \
+                            --volumes-from jenkins \
+                            -w "$PWD" \
+                            sonarsource/sonar-scanner-cli \
+                            -Dsonar.host.url="${SONAR_HOST_URL}" \
+                            -Dsonar.token="${SONAR_AUTH_TOKEN}" \
+                            -Dsonar.projectKey="devops-jenkins-app" \
+                            -Dsonar.sources="lab-05-sonarqube-trivy-devsecops" \
+                            -Dsonar.working.directory="${WORKSPACE}/.scannerwork" \
+                            -Dsonar.exclusions="**/*.bak,**/node_modules/**"
+                    '''
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            when {
+                expression { return params.ENABLE_QUALITY_GATE.toBoolean() }
+            }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        def qualityGate = waitForQualityGate abortPipeline: false
+                        if (qualityGate.status != 'OK') {
+                            error("[QUALITY-GATE] Durum: ${qualityGate.status}")
+                        }
+                        echo '[QUALITY-GATE] Durum: OK'
+                    }
+                }
+            }
+        }
+
+        stage('Docker İmaj Derleme') {
+            steps {
+                echo "Docker konteyner imajı derleniyor: ${env.APP_IMAGE}"
+                sh "docker build -t ${env.APP_IMAGE} lab-05-sonarqube-trivy-devsecops"
+            }
+        }
+
+        stage('Konteyner İmaj Güvenlik Taraması (Trivy Image)') {
+            steps {
+                echo "Derlenen imaj güvenlik açıklarına karşı taranıyor..."
+                script {
+                    int scanStatus = sh(script: """
+                        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \\
+                          -v trivy-cache:/root/.cache/ \\
+                          aquasec/trivy:latest image --exit-code 1 \\
+                          --severity ${params.TRIVY_SEVERITY} ${env.APP_IMAGE}
+                    """, returnStatus: true)
+                    if (scanStatus != 0 && params.FAIL_ON_VULNERABILITY.toBoolean()) {
+                        error("[TRIVY-IMAGE] Eşik üzerindeki zafiyet bulundu; build durduruldu.")
+                    }
+                    if (scanStatus != 0) {
+                        unstable("[TRIVY-IMAGE] Bulgular var; öğrenme modu nedeniyle build UNSTABLE olarak işaretlendi.")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${env.APP_IMAGE} 2>/dev/null || true"
+        }
+        success {
+            echo "[SUCCESS] DevSecOps güvenlik adımları başarıyla tamamlandı."
+        }
+    }
+}

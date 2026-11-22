@@ -1,0 +1,38 @@
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Node / Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build Outputs
+dist/
+build/
+target/
+*.jar
+*.war
+
+# Jenkins & Docker
+jenkins_home/
+*.log
+*.tmp
+
+# Secrets and Keys (STRICT SAFETY)
+*.key
+*.pem
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.kubeconfig
+kubeconfig*
+credentials
+*.env
+
+# AI & Agent internal files
+.agents/
+.codex/
+AGENTS.md

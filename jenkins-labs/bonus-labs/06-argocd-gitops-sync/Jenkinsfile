@@ -1,0 +1,47 @@
+// CI image'ı registry'ye gönderir (LAB-JEN-02A); bu pipeline yalnızca ArgoCD'ye hangi image'ın
+// çalışacağını söyler ve deploy'u ArgoCD'nin yapmasını bekler.
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'APP_IMAGE', defaultValue: '', description: 'Deploy edilecek image (ör. kullanici/devops-app-public:v2-abc1234)')
+        string(name: 'ARGOCD_APP', defaultValue: 'devops-app', description: 'ArgoCD Application adı')
+        string(name: 'ARGOCD_URL', defaultValue: 'https://k8s-labs-control-plane:30087', description: 'ArgoCD adresi (Jenkins kind ağından erişir)')
+        string(name: 'ARGOCD_CREDENTIALS_ID', defaultValue: 'argocd-admin', description: 'ArgoCD kullanıcı adı / parola credential ID')
+    }
+
+    environment {
+        // İlk build'de parametreler henüz kayıtlı değildir; varsayılanlar burada verilir
+        A_IMAGE = "${params.APP_IMAGE ?: ''}"
+        A_APP   = "${params.ARGOCD_APP ?: 'devops-app'}"
+        A_URL   = "${params.ARGOCD_URL ?: 'https://k8s-labs-control-plane:30087'}"
+    }
+
+    stages {
+        stage('Bilgi') {
+            steps {
+                echo "Uygulama: ${env.A_APP} | Image: ${env.A_IMAGE ?: '(verilmedi)'}"
+            }
+        }
+
+        stage('ArgoCD Sync') {
+            when {
+                expression { return env.A_IMAGE?.trim() }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: params.ARGOCD_CREDENTIALS_ID ?: 'argocd-admin', usernameVariable: 'ARGOCD_USER', passwordVariable: 'ARGOCD_PASS')]) {
+                    sh '''
+                        set -eu
+                        ARGOCD_URL="${A_URL}" ./bonus-labs/06-argocd-gitops-sync/scripts/argocd-sync.sh "${A_APP}" "${A_IMAGE}"
+                    '''
+                }
+            }
+        }
+    }
+}

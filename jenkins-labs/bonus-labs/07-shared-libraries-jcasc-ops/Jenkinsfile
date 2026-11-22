@@ -1,0 +1,53 @@
+// Manage Jenkins -> System -> Global Pipeline Libraries altında tanımlı kütüphaneyi yükler
+@Library('devops-shared-library') _
+
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    environment {
+        APP_NAME    = 'order-service'
+        APP_VERSION = '1.5.0'
+    }
+
+    stages {
+        stage('Başlangıç') {
+            steps {
+                // vars/logInfo.groovy
+                logInfo("${env.APP_NAME} v${env.APP_VERSION} build başladı")
+            }
+        }
+
+        stage('Image') {
+            steps {
+                // Örnek image: alpine, uygulama adı ve sürümüyle etiketlenir
+                sh '''
+                    set -eu
+                    docker pull -q alpine:3.20
+                    docker tag alpine:3.20 "${APP_NAME}:${APP_VERSION}"
+                '''
+            }
+        }
+
+        stage('Harbor Push') {
+            steps {
+                // vars/harborPush.groovy
+                harborPush(image: env.APP_NAME, tag: env.APP_VERSION)
+            }
+        }
+    }
+
+    post {
+        success {
+            // vars/notifyStatus.groovy
+            notifyStatus(status: 'SUCCESS', message: 'Bütün aşamalar tamamlandı')
+        }
+        failure {
+            notifyStatus(status: 'FAILURE', message: 'Build başarısız')
+        }
+    }
+}

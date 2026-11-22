@@ -1,0 +1,147 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 20, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(name: 'STUDENT_NO', defaultValue: '101', description: 'Sunucu numarası: hostname student103 ise 103')
+        booleanParam(name: 'PUSH_TO_DOCKERHUB', defaultValue: true, description: 'Image\'ı Docker Hub\'daki devops-app-public reposuna gönder. Kapalıysa image Kind cluster\'ına doğrudan yüklenir.')
+        string(name: 'DOCKERHUB_CREDENTIALS_ID', defaultValue: 'dockerhub-creds', description: 'Jenkins Username with password credential ID')
+        string(name: 'KUBECONFIG_CREDENTIALS_ID', defaultValue: 'kubeconfig-student-kind', description: 'Jenkins Secret file credential ID')
+    }
+
+    environment {
+        SOURCE_REPOSITORY = 'https://github.com/devopsatolyesi-labs/jenkins-lab-python-flask.git'
+        SOURCE_DIRECTORY = 'python-flask-source'
+        LOCAL_CONTAINER = 'student-python-flask'
+        LOCAL_PORT = '19004'
+        K8S_NAMESPACE = 'student-python-lab'
+        DOCKERHUB_REPO = 'devops-app-public'
+    }
+
+    stages {
+        stage('Parametre Kontrolü') {
+            steps {
+                script {
+                    // İlk build'de parametre henüz kayıtlı değilse varsayılan (true) kullanılır
+                    env.PUSH = (params.PUSH_TO_DOCKERHUB == false) ? 'false' : 'true'
+                    if (env.PUSH == 'true') {
+                        // Docker Hub kullanıcı adı credential'dan okunur; ayrıca yazmak gerekmez
+                        withCredentials([usernamePassword(credentialsId: params.DOCKERHUB_CREDENTIALS_ID ?: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_TOKEN')]) {
+                            env.DOCKERHUB_USER = env.DH_USER
+                        }
+                    }
+                    def std = params.STUDENT_NO?.trim() ?: '101'
+                    if (std.startsWith('student')) {
+                        env.APP_HOST = "${std}-app1.devopsatolyesi.com"
+                    } else {
+                        env.APP_HOST = "student${std}-app1.devopsatolyesi.com"
+                    }
+                    echo "Hedef Host Adı: ${env.APP_HOST}"
+                }
+            }
+        }
+
+        stage('Uygulamayı GitHubdan Al') {
+            steps {
+                sh '''
+                    set -eu
+                    rm -rf "$SOURCE_DIRECTORY"
+                    git clone --depth 1 "$SOURCE_REPOSITORY" "$SOURCE_DIRECTORY"
+                    test -f "$SOURCE_DIRECTORY/Dockerfile"
+                    test -f "$SOURCE_DIRECTORY/k8s/deployment.yaml"
+                '''
+                script {
+                    env.GIT_SHA = sh(script: "git -C ${env.SOURCE_DIRECTORY} rev-parse --short HEAD", returnStdout: true).trim()
+                    env.IMAGE_TAG = "v${env.BUILD_NUMBER}-${env.GIT_SHA}"
+                    def registryPrefix = env.PUSH == 'true' ? env.DOCKERHUB_USER : 'local'
+                    env.IMAGE_REF = "${registryPrefix}/${env.DOCKERHUB_REPO}:${env.IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Python Testleri') {
+            steps {
+                sh 'docker build --target test -t python-flask-test:${IMAGE_TAG} ${SOURCE_DIRECTORY}'
+            }
+        }
+
+        stage('Docker Image Build') {
+            steps {
+                sh 'docker build --target runtime -t ${IMAGE_REF} ${SOURCE_DIRECTORY}'
+            }
+        }
+
+        stage('Docker Huba Public Push') {
+            when {
+                expression { return env.PUSH == 'true' }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: params.DOCKERHUB_CREDENTIALS_ID ?: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_TOKEN')]) {
+                    sh '''
+                        set -eu
+                        # Giriş bilgisi geçici klasöre yazılır ve build sonunda silinir
+                        export DOCKER_CONFIG="$(mktemp -d)"
+                        printf '%s' "$DH_TOKEN" | docker login --username "$DH_USER" --password-stdin
+                        docker push "$IMAGE_REF"
+                        docker logout
+                        rm -rf "$DOCKER_CONFIG"
+                    '''
+                }
+            }
+        }
+
+        stage('Ayni Makinede Docker Deploy') {
+            steps {
+                sh '''
+                    set -eu
+                    docker rm -f "$LOCAL_CONTAINER" 2>/dev/null || true
+                    docker run -d --name "$LOCAL_CONTAINER" -p "127.0.0.1:${LOCAL_PORT}:8080" "$IMAGE_REF"
+                    for attempt in 1 2 3 4 5; do
+                        if docker exec "$LOCAL_CONTAINER" wget -qO- http://127.0.0.1:8080/health | grep -q 'healthy'; then
+                            exit 0
+                        fi
+                        sleep 1
+                    done
+                    docker logs "$LOCAL_CONTAINER"
+                    exit 1
+                '''
+            }
+        }
+
+        stage('KinD Kubernetes Deploy') {
+            steps {
+                withCredentials([file(credentialsId: params.KUBECONFIG_CREDENTIALS_ID, variable: 'KUBECONFIG')]) {
+                    sh '''
+                        set -eu
+                        if [ "$PUSH" = "false" ]; then
+                            echo "İmaj KinD kümesine yerel olarak yükleniyor..."
+                            kind load docker-image "$IMAGE_REF" --name k8s-labs
+                        fi
+                        kubectl --kubeconfig "$KUBECONFIG" apply -f "$SOURCE_DIRECTORY/k8s/namespace.yaml"
+                        sed "s|__IMAGE_REF__|$IMAGE_REF|g" "$SOURCE_DIRECTORY/k8s/deployment.yaml" | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+                        kubectl --kubeconfig "$KUBECONFIG" apply -f "$SOURCE_DIRECTORY/k8s/service.yaml"
+                        # ingressClassName silinir: cluster'ın varsayılan ingress sınıfı kullanılır (k8s-labs'ta Traefik)
+                        sed -e "s|__APP_HOST__|$APP_HOST|g" -e '/ingressClassName:/d' "$SOURCE_DIRECTORY/k8s/ingress.yaml" | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+                        kubectl --kubeconfig "$KUBECONFIG" -n "$K8S_NAMESPACE" rollout status deployment/python-flask --timeout=120s
+                        kubectl --kubeconfig "$KUBECONFIG" -n "$K8S_NAMESPACE" exec deployment/python-flask -- wget -qO- http://127.0.0.1:8080/health | grep -q 'healthy'
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Docker: http://127.0.0.1:19004/health'
+            echo "KinD:   https://${env.APP_HOST}/"
+            echo "Health: https://${env.APP_HOST}/health"
+        }
+        failure {
+            echo 'Pipeline başarısız oldu; başarısız stage konsol çıktısını düzeltmeden devam etmeyin.'
+        }
+    }
+}

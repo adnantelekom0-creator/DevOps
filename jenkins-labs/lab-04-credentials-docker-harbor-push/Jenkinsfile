@@ -1,0 +1,117 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'HARBOR_HOST', defaultValue: '127.0.0.1:18444', description: 'Harbor registry adresi (Docker 127.0.0.1 registry\'lerine TLS olmadan bağlanır)')
+        string(name: 'HARBOR_PROJECT', defaultValue: 'devops-public', description: 'Harbor proje adı')
+        string(name: 'APP_NAME', defaultValue: 'demo-app', description: 'Uygulama imaj adı')
+        booleanParam(name: 'PUSH_TO_HARBOR', defaultValue: true, description: 'İmajı Harbor\'a push et')
+        string(name: 'REGISTRY_CREDENTIALS_ID', defaultValue: 'harbor-creds', description: 'Jenkins Credentials ID')
+    }
+
+    stages {
+        stage('Kaynak Kodları Çekme (Checkout)') {
+            steps {
+                checkout scm
+                sh 'test -f lab-04-credentials-docker-harbor-push/Dockerfile'
+                script {
+                    env.SHORT_COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.IMAGE_TAG = "v${env.BUILD_NUMBER}-${env.SHORT_COMMIT}"
+                    env.TARGET_IMAGE = "${params.HARBOR_HOST}/${params.HARBOR_PROJECT}/${params.APP_NAME}:${env.IMAGE_TAG}"
+                    env.LATEST_IMAGE = "${params.HARBOR_HOST}/${params.HARBOR_PROJECT}/${params.APP_NAME}:latest"
+                    env.CONTAINER_TEST_NAME = "smoke-test-runner-${env.BUILD_NUMBER}"
+                }
+            }
+        }
+
+        stage('Ortam Bilgileri') {
+            steps {
+                echo "=== Docker Build ve Registry Parametreleri ==="
+                echo "Hedef İmaj  : ${env.TARGET_IMAGE}"
+                echo "Commit SHA  : ${env.SHORT_COMMIT}"
+                echo "Harbor Push : ${params.PUSH_TO_HARBOR}"
+                sh 'docker version'
+            }
+        }
+
+        stage('Birim Testler (İzole Konteyner)') {
+            steps {
+                echo "Uygulama testleri izole Node.js ortamında koşturuluyor..."
+                sh '''
+                    set -eu
+                    docker run --rm \
+                      --volumes-from jenkins \
+                      -w "$PWD/lab-04-credentials-docker-harbor-push/app" \
+                      node:18-alpine \
+                      sh -ceu 'npm install --ignore-scripts && npm test'
+                '''
+            }
+        }
+
+        stage('Docker İmaj Derleme') {
+            steps {
+                echo "Docker imajı üretiliyor: ${env.TARGET_IMAGE}"
+                sh """
+                    docker build \
+                        -t ${TARGET_IMAGE} \
+                        -t ${LATEST_IMAGE} \
+                        lab-04-credentials-docker-harbor-push
+                """
+            }
+        }
+
+        stage('Konteyner Smoke & Sağlık Testi') {
+            steps {
+                echo "Derlenen imaj test konteyneri olarak ayağa kaldırılıyor..."
+                sh """
+                    docker rm -f ${CONTAINER_TEST_NAME} 2>/dev/null || true
+                    docker run -d --name ${CONTAINER_TEST_NAME} ${TARGET_IMAGE}
+                    for attempt in 1 2 3 4 5; do
+                        if docker exec ${CONTAINER_TEST_NAME} node -e "fetch('http://127.0.0.1:3000/health').then(async r => { if (!r.ok) process.exit(1); const body = await r.json(); if (body.status !== 'UP') process.exit(1) }).catch(() => process.exit(1))"; then
+                            break
+                        fi
+                        test "\$attempt" -lt 5 || { docker logs ${CONTAINER_TEST_NAME}; exit 1; }
+                        sleep 1
+                    done
+
+                    docker rm -f ${CONTAINER_TEST_NAME}
+                    echo "[SUCCESS] Konteyner sağlık testi başarıyla tamamlandı."
+                """
+            }
+        }
+
+        stage('Harbor Registry Push') {
+            when {
+                expression { return params.PUSH_TO_HARBOR.toBoolean() }
+            }
+            steps {
+                echo "Harbor Registry'sine imaj push ediliyor..."
+                withCredentials([usernamePassword(credentialsId: params.REGISTRY_CREDENTIALS_ID, usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASS')]) {
+                    sh """
+                        echo "\${HARBOR_PASS}" | docker login ${params.HARBOR_HOST} -u "\${HARBOR_USER}" --password-stdin
+                        docker push ${TARGET_IMAGE}
+                        docker push ${LATEST_IMAGE}
+                        docker image inspect --format='{{index .RepoDigests 0}}' ${TARGET_IMAGE}
+                        docker logout ${params.HARBOR_HOST}
+                        echo "[SUCCESS] İmaj Harbor'a başarıyla yüklendi: ${TARGET_IMAGE}"
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker ps -aq --filter "name=smoke-test-runner" | xargs -r docker rm -f 2>/dev/null || true'
+        }
+        success {
+            echo "[SUCCESS] Docker derleme, smoke test ve Harbor push akışı tamamlandı."
+        }
+    }
+}

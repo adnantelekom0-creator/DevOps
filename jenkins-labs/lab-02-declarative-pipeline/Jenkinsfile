@@ -1,0 +1,87 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        timeout(time: 10, unit: 'MINUTES')
+        retry(1)
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        APP_NAME    = 'jenkins-demo-microservice'
+        APP_VERSION = '1.0.0'
+    }
+
+    stages {
+        stage('Kaynak Kodları Çekme (Checkout)') {
+            steps {
+                checkout scm
+                sh 'test -f lab-02-declarative-pipeline/app/package.json'
+            }
+        }
+
+        stage('Hazırlık & Bilgi') {
+            steps {
+                echo "=========================================="
+                echo "UYGULAMA    : ${env.APP_NAME}"
+                echo "SÜRÜM       : ${env.APP_VERSION}"
+                echo "BUILD ID    : ${env.BUILD_ID}"
+                echo "BUILD NO    : ${env.BUILD_NUMBER}"
+                echo "NODE ADI    : ${env.NODE_NAME}"
+                echo "=========================================="
+            }
+        }
+
+        stage('Derleme (Build)') {
+            steps {
+                echo "Uygulama derleme bilgileri üretiliyor..."
+                dir('lab-02-declarative-pipeline') {
+                    sh '''
+                        set -eu
+                        mkdir -p output
+                        echo "Derleme Tamamlandı: $(date -u)" > output/build-info.txt
+                        echo "Uygulama: ${APP_NAME}" >> output/build-info.txt
+                        echo "Sürüm: ${APP_VERSION}" >> output/build-info.txt
+                        echo "Build No: ${BUILD_NUMBER}" >> output/build-info.txt
+                        cat output/build-info.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Birim Test (Unit Test)') {
+            steps {
+                echo "Birim testler çalıştırılıyor..."
+                dir('lab-02-declarative-pipeline') {
+                    sh '''
+                        set -eu
+                        docker run --rm \
+                          --volumes-from jenkins \
+                          -w "$PWD/app" \
+                          node:18-alpine \
+                          sh -ceu 'npm install --ignore-scripts && npm test'
+                    '''
+                }
+            }
+        }
+
+        stage('Arşivleme (Artifact Archive)') {
+            steps {
+                archiveArtifacts artifacts: 'lab-02-declarative-pipeline/output/*.txt', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Pipeline yürütmesi tamamlandı."
+        }
+        success {
+            echo "[SUCCESS] Pipeline başarıyla tamamlandı. Artefaktlar arşivlendi."
+        }
+        failure {
+            echo "[ERROR] Pipeline aşamalarından biri başarısız oldu!"
+        }
+    }
+}

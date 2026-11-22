@@ -1,0 +1,25 @@
+jenkins:
+  systemMessage: "Bu Jenkins, jenkins-as-code/jenkins.yaml dosyasından kuruldu."
+  numExecutors: 2
+  # Yönetici kullanıcı .env'deki değerlerle oluşturulur; kurulum sihirbazı açılmaz.
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_USER}"
+          name: "Jenkins Admin"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  # Giriş yapan kullanıcı her şeyi yapabilir; giriş yapmayan hiçbir şey göremez.
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: "${JENKINS_URL}"
+
+# Job DSL betikleri: her dosya bir job tanımlar.
+jobs:
+  - file: /var/jenkins_config/jobs/01-hello.groovy
+  - file: /var/jenkins_config/jobs/02-parameters.groovy
+  - file: /var/jenkins_config/jobs/03-environment.groovy

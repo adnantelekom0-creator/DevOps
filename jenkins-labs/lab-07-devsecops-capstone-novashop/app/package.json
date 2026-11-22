@@ -1,0 +1,12 @@
+{
+  "name": "novashop-order-service",
+  "version": "1.0.0",
+  "description": "NovaShop Order Service - Production DevSecOps Capstone Microservice",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "author": "DevOps Atolyesi",
+  "license": "MIT"
+}

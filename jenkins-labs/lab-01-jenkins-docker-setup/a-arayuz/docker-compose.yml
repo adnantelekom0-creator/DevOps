@@ -1,0 +1,16 @@
+# A bölümü: hazır Jenkins image'ı, ek ayar yok. Kurulum sihirbazla yapılır.
+name: jenkins-a
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    container_name: jenkins
+    restart: unless-stopped
+    ports:
+      - "18080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_a_home:/var/jenkins_home
+
+volumes:
+  jenkins_a_home:

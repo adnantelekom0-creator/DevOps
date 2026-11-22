@@ -1,0 +1,106 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    parameters {
+        string(name: 'NAMESPACE', defaultValue: 'default', description: 'Hedef Kubernetes Namespace')
+        string(name: 'APP_IMAGE', defaultValue: 'nginx:alpine', description: 'Dağıtılacak Konteyner İmaj ve Etiketi')
+        string(name: 'REPLICA_COUNT', defaultValue: '2', description: 'Pod replika sayısı')
+        string(name: 'KUBECONFIG_CREDENTIALS_ID', defaultValue: 'kubeconfig-student-kind', description: 'Jenkins Kubeconfig Secret File ID (LAB-JEN-02A)')
+        booleanParam(name: 'AUTO_ROLLBACK', defaultValue: true, description: 'Hata anında otomatik rollback yapılsın mı?')
+    }
+
+    environment {
+        DEPLOYMENT_NAME = 'jenkins-demo-app'
+    }
+
+    stages {
+        stage('Kaynak Kodları Çekme (Checkout)') {
+            steps {
+                checkout scm
+                sh 'test -f lab-06-kubernetes-kind-rolling-update/k8s/deployment.yaml'
+            }
+        }
+
+        stage('Kubernetes Erişim Denetimi') {
+            steps {
+                echo "=== Kubernetes Cluster Bağlantı Kontrolü ==="
+                sh '''
+                    if command -v kubectl >/dev/null 2>&1; then
+                        kubectl version --client=true || true
+                    fi
+                '''
+            }
+        }
+
+        stage('Manifest Şablonlama (Templating)') {
+            steps {
+                echo "Kubernetes manifestleri güncelleniyor: İmaj=${params.APP_IMAGE} Replika=${params.REPLICA_COUNT}"
+                sh """
+                    set -eu
+                    cp lab-06-kubernetes-kind-rolling-update/k8s/deployment.yaml deployment.rendered.yaml
+                    sed -i.bak 's|image: .*|image: ${params.APP_IMAGE}|g' deployment.rendered.yaml
+                    sed -i.bak 's|replicas: .*|replicas: ${params.REPLICA_COUNT}|g' deployment.rendered.yaml
+                    rm -f deployment.rendered.yaml.bak
+                    cat deployment.rendered.yaml
+                """
+            }
+        }
+
+        stage('Kubernetes Cluster\'ına Dağıtım (Deploy)') {
+            steps {
+                echo "Manifestler uygulanıyor: Namespace=${params.NAMESPACE}"
+                withCredentials([file(credentialsId: params.KUBECONFIG_CREDENTIALS_ID, variable: 'KUBECONFIG_FILE')]) {
+                    sh """
+                        set -eu
+                        export KUBECONFIG="\${KUBECONFIG_FILE}"
+                        kubectl create namespace ${params.NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                        kubectl apply -n ${params.NAMESPACE} -f deployment.rendered.yaml
+                        kubectl apply -n ${params.NAMESPACE} -f lab-06-kubernetes-kind-rolling-update/k8s/service.yaml
+                        kubectl get deployment ${DEPLOYMENT_NAME} -n ${params.NAMESPACE}
+                    """
+                }
+            }
+        }
+
+        stage('Rollout Durum Takibi ve Doğrulama') {
+            steps {
+                echo "Deployment rollout süreci izleniyor..."
+                script {
+                    int rolloutStatus = withCredentials([file(credentialsId: params.KUBECONFIG_CREDENTIALS_ID, variable: 'KUBECONFIG_FILE')]) {
+                        sh(script: "export KUBECONFIG=\"\${KUBECONFIG_FILE}\" && kubectl rollout status deployment/${DEPLOYMENT_NAME} -n ${params.NAMESPACE} --timeout=60s", returnStatus: true)
+                    }
+                    if (rolloutStatus != 0 && params.AUTO_ROLLBACK.toBoolean()) {
+                        withCredentials([file(credentialsId: params.KUBECONFIG_CREDENTIALS_ID, variable: 'KUBECONFIG_FILE')]) {
+                            sh "export KUBECONFIG=\"\${KUBECONFIG_FILE}\" && kubectl rollout undo deployment/${DEPLOYMENT_NAME} -n ${params.NAMESPACE} && kubectl rollout status deployment/${DEPLOYMENT_NAME} -n ${params.NAMESPACE} --timeout=60s"
+                        }
+                    }
+                    if (rolloutStatus != 0) {
+                        error('Dağıtım başarısız oldu; rollback sonucu konsol çıktısında gösterildi.')
+                    }
+                }
+            }
+        }
+
+        stage('Canlı Servis Doğrulaması (Smoke Test)') {
+            steps {
+                withCredentials([file(credentialsId: params.KUBECONFIG_CREDENTIALS_ID, variable: 'KUBECONFIG_FILE')]) {
+                    sh "export KUBECONFIG=\"\${KUBECONFIG_FILE}\" && kubectl get pods,svc -n ${params.NAMESPACE} -l app=${DEPLOYMENT_NAME}"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] Kubernetes dağıtımı başarıyla tamamlandı."
+        }
+        failure {
+            echo "[ERROR] Dağıtım sürecinde hata oluştu."
+        }
+    }
+}
